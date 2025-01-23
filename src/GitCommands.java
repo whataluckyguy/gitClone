@@ -23,7 +23,7 @@ public static void init(){
             new File(gitDir, "config").createNewFile();
             new File(gitDir, "description").createNewFile();
             new File(gitDir, "index").createNewFile();
-            System.out.println("Initialized empty Git respository in " + gitDir.getAbsolutePath());
+            System.out.println("Initialized empty Git repository in " + gitDir.getAbsolutePath());
 
         } catch (IOException e){
             System.out.println("Error creating Git files: " + e.getMessage());
@@ -57,11 +57,7 @@ public static void add(String filePath) {
         }
 
 //        store object in .git/objects/<hash-prefix>/<hash-suffix>
-//        String objectPath = ".git/objects/" + hash.substring(0, 2) + "/" + hash.substring(2);
         Path objectPath = Paths.get(".git", "objects", hash.substring(0, 2), hash.substring(2));
-//        File objectFile = new File(objectPath);
-//        objectFile.getParentFile().mkdirs();
-//        Files.write(objectFile.toPath(), content);
         Files.createDirectories(objectPath.getParent());
         Files.write(objectPath, content);
 
@@ -73,19 +69,6 @@ public static void add(String filePath) {
         System.out.println("Error adding files: " + e.getMessage());
     }
 }
-
-// private static boolean isFileInIndex(String hash, String filePath) throws IOException{
-//     File indexFile = new File(".git/index");
-//     if(!indexFile.exists()) return false;
-
-//     String indexContent = Files.readString(indexFile.toPath());
-//     String entry = hash + " " + filePath;
-//     boolean containsEntry = indexContent.contains(entry);
-// //    Debug output
-//     System.out.println("Checking if in index: " + entry + " -> " + containsEntry);
-// //    return indexContent.contains(entry);
-//     return containsEntry;
-// }
 
 private static boolean isFileInIndex(String hash, String filePath) throws IOException {
     // First check the current index
