@@ -41,6 +41,20 @@ public class Main {
             case "log":
                 GitCommands.log();
                 break;
+            case "branch":
+                if(args.length < 2){
+                    System.out.println("Usage: branch <branch-name>");
+                } else {
+                    GitCommands.createBranch(args[1]);
+                }
+                break;
+            case "checkout":
+                if(args.length < 2){
+                    System.out.println("Usage: checkout <branch-name>");
+                } else {
+                    GitCommands.switchBranch(args[1]);
+                }
+                break;
             default:
                 System.out.println("Unknown command: " + command);
         }
