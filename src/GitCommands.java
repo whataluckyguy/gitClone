@@ -65,22 +65,102 @@ public static void createBranch(String branchName) {
         }
     }
 
-public static void switchBranch(String branchName){
-    if(!isGitInitialized()){
-        System.out.println("Error: Not a Git repository. Run 'init' first.");
-        return;
-    }
-    Path branchPath = Paths.get(".git", "refs", "heads", branchName);
-    if(!Files.exists(branchPath)){
-        System.out.println("Error: Branch '" + branchName + "' does not exist.");
-        return;
-    }
-    try{
-        Files.writeString(Paths.get(".git/HEAD"), "ref: refs/heads/" + branchName);
+public static void switchBranch(String branchName) {
+    try {
+        // Verify branch exists
+        Path branchPath = Paths.get(".git", "refs", "heads", branchName);
+        if (!Files.exists(branchPath)) {
+            System.out.println("Error: Branch '" + branchName + "' does not exist.");
+            return;
+        }
+
+        // Save any uncommitted changes (optional, for now we'll just check for conflicts)
+        if (hasUncommittedChanges()) {
+            System.out.println("Error: You have uncommitted changes.");
+            return;
+        }
+
+        // Get commit hash for target branch
+        String commitHash = Files.readString(branchPath).trim();
+        
+        // Update working directory
+        updateWorkingDirectory(commitHash);
+        
+        // Update HEAD
+        Path headPath = Paths.get(".git", "HEAD");
+        Files.writeString(headPath, "ref: refs/heads/" + branchName);
+        
         System.out.println("Switched to branch '" + branchName + "'.");
-    } catch (IOException e){
-        System.out.println("Error switching branch: " + e.getMessage());
+        
+    } catch (IOException | NoSuchAlgorithmException e) {
+        System.out.println("Error switching branches: " + e.getMessage());
     }
+}
+
+private static void updateWorkingDirectory(String commitHash) throws IOException {
+    // Read commit object
+    Path commitPath = Paths.get(".git", "objects", 
+            commitHash.substring(0, 2), 
+            commitHash.substring(2));
+    List<String> commitLines = Files.readAllLines(commitPath);
+    
+    // Get tree hash from commit
+    String treeHash = "";
+    for (String line : commitLines) {
+        if (line.startsWith("tree ")) {
+            treeHash = line.substring(5).trim();
+            break;
+        }
+    }
+    
+    // Read tree object
+    Path treePath = Paths.get(".git", "objects", 
+            treeHash.substring(0, 2), 
+            treeHash.substring(2));
+    List<String> treeLines = Files.readAllLines(treePath);
+    
+    // Update working directory files
+    for (String line : treeLines) {
+        String[] parts = line.split(" ");
+        if (parts.length == 2) {
+            String hash = parts[0];
+            String filePath = parts[1];
+            
+            // Read content from object store
+            Path objectPath = Paths.get(".git", "objects", 
+                    hash.substring(0, 2), 
+                    hash.substring(2));
+            byte[] content = Files.readAllBytes(objectPath);
+            
+            // Write to working directory
+            Files.write(Paths.get(filePath), content);
+        }
+    }
+}
+
+private static boolean hasUncommittedChanges() throws IOException, NoSuchAlgorithmException {
+    File indexFile = new File(".git/index");
+    if (!indexFile.exists()) {
+        return false;
+    }
+    
+    List<String> indexLines = Files.readAllLines(indexFile.toPath());
+    for (String line : indexLines) {
+        String[] parts = line.split(" ");
+        if (parts.length == 2) {
+            String hash = parts[0];
+            String filePath = parts[1];
+            
+            File file = new File(filePath);
+            if (file.exists()) {
+                String currentHash = computeSHA1(Files.readAllBytes(file.toPath()));
+                if (!currentHash.equals(hash)) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
 }
 
 public static void add(String filePath) {
@@ -202,51 +282,62 @@ public static void commit(String message) {
     }
 
     try {
-        List<String> indexLines = Files.readAllLines(indexFile.toPath());
+        // List<String> indexLines = Files.readAllLines(indexFile.toPath());
+        String treeHash = createTreeFromIndex();
 
+        String currentBranch = getCurrentBranch();
         StringBuilder commitContent = new StringBuilder();
-        commitContent.append("tree " + computeTreeHash(indexLines) + "\n");
-
-        // Get current branch from HEAD
-        String headContent = Files.readString(Paths.get(".git/HEAD")).trim();
-        String currentBranch = headContent.startsWith("ref: ")
-                ? headContent.substring(5)
-                : "refs/heads/main";  // Default to main if no branch selected
-
-        // Get parent commit for the current branch
-        Path branchPath = Paths.get(".git", currentBranch);
-        String parentCommitHash = Files.exists(branchPath)
-                ? Files.readString(branchPath).trim()
-                : "";
-
-        if (!parentCommitHash.isEmpty()) {
-            commitContent.append("parent " + parentCommitHash + "\n");
+        commitContent.append("tree ").append(treeHash).append("\n");
+        
+        // Add parent if it exists
+        String parentHash = getCurrentCommitHash();
+        if (!parentHash.isEmpty()) {
+            commitContent.append("parent ").append(parentHash).append("\n");
         }
-
-        commitContent.append("author " + System.getProperty("user.name") + "\n");
-        commitContent.append("message " + message + "\n");
-
-        String commitHash = computeSHA1(commitContent.toString().getBytes());
-
+        
+        commitContent.append("author ").append(System.getProperty("user.name")).append("\n");
+        commitContent.append("message ").append(message).append("\n");
+        
         // Store commit object
-        Path commitPath = Paths.get(".git", "objects", commitHash.substring(0, 2), commitHash.substring(2));
+        String commitHash = computeSHA1(commitContent.toString().getBytes());
+        Path commitPath = Paths.get(".git", "objects", 
+                commitHash.substring(0, 2), 
+                commitHash.substring(2));
         Files.createDirectories(commitPath.getParent());
         Files.write(commitPath, commitContent.toString().getBytes());
-
-        // Update current branch with new commit hash
-        Files.writeString(branchPath, commitHash);
-
-        System.out.println("Committed to branch '" +
-                currentBranch.substring(currentBranch.lastIndexOf('/') + 1) +
+        
+        // Update branch reference
+        updateBranchReference(currentBranch, commitHash);
+        
+        System.out.println("Committed to branch '" + currentBranch + 
                 "' with hash: " + commitHash);
-
-        // Save last committed state and clear index
-        Path lastCommitStatePath = Paths.get(".git", "last_commit_state");
-        Files.write(lastCommitStatePath, Files.readAllBytes(indexFile.toPath()));
-        Files.writeString(indexFile.toPath(), "");
+        
     } catch (IOException | NoSuchAlgorithmException e) {
         System.out.println("Error committing changes: " + e.getMessage());
     }
+}
+
+private static String createTreeFromIndex() throws IOException, NoSuchAlgorithmException {
+    File indexFile = new File(".git/index");
+    if (!indexFile.exists()) {
+        return "";
+    }
+    
+    List<String> indexLines = Files.readAllLines(indexFile.toPath());
+    StringBuilder treeContent = new StringBuilder();
+    
+    for (String line : indexLines) {
+        treeContent.append(line).append("\n");
+    }
+    
+    String treeHash = computeSHA1(treeContent.toString().getBytes());
+    Path treePath = Paths.get(".git", "objects", 
+            treeHash.substring(0, 2), 
+            treeHash.substring(2));
+    Files.createDirectories(treePath.getParent());
+    Files.write(treePath, treeContent.toString().getBytes());
+    
+    return treeHash;
 }
 
 public static void merge(String sourceBranchName){
@@ -285,7 +376,6 @@ public static void merge(String sourceBranchName){
         }
 
     } catch (Exception e) {
-        // TODO: handle exception
         System.out.println("Error during merge: " + e.getMessage());
     }
 }
@@ -522,6 +612,9 @@ private static void performFastForwardMerge(String sourceBranchName, String sour
     Path currentBranchPath = Paths.get(".git", "refs", "heads", currentBranch);
     Files.writeString(currentBranchPath, sourceCommitHash);
 
+//    Update working directory with the source branch content
+    updateWorkingDirectory(sourceCommitHash);
+
     System.out.println("Fast-forward merge complete.");
     System.out.println("Current branch '" + currentBranch + "' is now at " + sourceCommitHash);
 }
@@ -555,10 +648,16 @@ String currentCommitHash, String sourceCommitHash, String mergeBase) throws IOEx
     Files.write(commitPath, commitContent.toString().getBytes());
 
     // Update branch reference
-    Path branchPath = Paths.get(".git", "refs", "heads", currentBranch);
-    Files.writeString(branchPath, commitHash);
+//    Path branchPath = Paths.get(".git", "refs", "heads", currentBranch);
+//    Files.writeString(branchPath, commitHash);
 
-    System.out.println("Merge succesful.");
+//    Update branch reference
+    updateBranchReference(currentBranch, commitHash);
+
+//    Update working directory with merged content
+    updateWorkingDirectory(commitHash);
+
+    System.out.println("Merge successful.");
     System.out.println("Created merge commit: " + commitHash);
 }
 
@@ -711,6 +810,12 @@ public static void status(){
 public static boolean isGitInitialized(){
     File gitDir = new File(".git");
     return gitDir.exists() && gitDir.isDirectory();
+}
+
+private static void updateBranchReference(String branchName, String commitHash) throws IOException {
+    Path branchPath = Paths.get(".git", "refs", "heads", branchName);
+    Files.createDirectories(branchPath.getParent());
+    Files.writeString(branchPath, commitHash);
 }
 
 }
